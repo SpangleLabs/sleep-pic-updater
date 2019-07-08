@@ -15,6 +15,7 @@ ASLEEP_PIC = "./asleep.png"
 
 currently_asleep = None
 
+
 def is_currently_sleeping():
     resp = requests.get(DAILYS_URL)
     if resp.status_code == 200:
@@ -22,11 +23,13 @@ def is_currently_sleeping():
     else:
         return None
 
-def update_pic(client, is_sleeping):
+
+def update_pic(tele_client, is_sleeping):
     path = ASLEEP_PIC if is_sleeping else AWAKE_PIC
-    request = UploadProfilePhotoRequest(file=client.upload_file(path))
-    result = client(request)
+    request = UploadProfilePhotoRequest(file=tele_client.upload_file(path))
+    result = tele_client(request)
     print(result.stringify())
+
 
 with TelegramClient('anon', API_ID, API_HASH) as client:
     # Get info about current user
@@ -35,12 +38,15 @@ with TelegramClient('anon', API_ID, API_HASH) as client:
     print(me.username)
     
     while True:
-        time.sleep(60)
-    
-        print("Checking..")
-        previously_asleep = currently_asleep
-        currently_asleep = is_currently_sleeping()
-        if currently_asleep is not None and currently_asleep != previously_asleep:
-            update_pic(client, currently_asleep)
+        try:
+            time.sleep(60)
+
+            print("Checking..")
+            previously_asleep = currently_asleep
+            currently_asleep = is_currently_sleeping()
+            if currently_asleep is not None and currently_asleep != previously_asleep:
+                update_pic(client, currently_asleep)
+        except KeyboardInterrupt:
+            break
     
 print("Shutting down")
