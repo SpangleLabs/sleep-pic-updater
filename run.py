@@ -62,16 +62,17 @@ with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
     print(me.stringify())
     print(me.username)
 
-    while True:
-        try:
-            time.sleep(5)
+while True:
+    try:
+        time.sleep(60)
 
-            print("Checking..")
-            previously_asleep = currently_asleep
-            currently_asleep = is_currently_sleeping()
-            if currently_asleep is not None and currently_asleep != previously_asleep:
+        print("Checking..")
+        previously_asleep = currently_asleep
+        currently_asleep = is_currently_sleeping()
+        if currently_asleep is not None and currently_asleep != previously_asleep:
+            with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
                 update_pic(client, currently_asleep)
-        except KeyboardInterrupt:
-            break
+    except KeyboardInterrupt:
+        break
 
 print("Shutting down")
