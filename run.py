@@ -56,8 +56,8 @@ def update_pic(tele_client, is_sleeping):
         print(f"Removed old photo for: {other_key}")
 
 
+previously_asleep = None
 currently_asleep = None
-initially_asleep = None
 with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
     # Get info about current user
     me = client.get_me()
@@ -70,9 +70,9 @@ with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
             time.sleep(60)
 
             print("Checking..")
-            previously_asleep = currently_asleep
             currently_asleep = is_currently_sleeping()
             if currently_asleep is not None and currently_asleep != previously_asleep:
+                previously_asleep = currently_asleep
                 update_pic(client, currently_asleep)
         except KeyboardInterrupt:
             break
