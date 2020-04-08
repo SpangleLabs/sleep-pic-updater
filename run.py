@@ -14,7 +14,12 @@ with open("config.json", "r") as f:
 
 def is_currently_sleeping():
     try:
-        resp = requests.get(CONFIG['dailys_url'])
+        resp = requests.get(
+            CONFIG['dailys_url'],
+            headers={
+                "Authorization": CONFIG.get("dailys_auth_key", "")
+            }
+        )
         if resp.status_code == 200:
             return resp.json()['is_sleeping']
         else:
