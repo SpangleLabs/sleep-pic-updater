@@ -61,7 +61,7 @@ def update_pic(tele_client, is_sleeping):
         print(f"Removed old photo for: {other_key}")
 
 
-previously_asleep = None
+previously_asleep = "file" in CONFIG["asleep_pic"]
 currently_asleep = None
 with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
     # Get info about current user
