@@ -19,11 +19,11 @@ def save_config():
         json.dump(CONFIG, c, indent=2)
         
 
-@dataclasses.dataclass
 class FileData:
-    file_id: int
-    access_hash: int
-    file_reference: bytes
+    def __init__(self, file_id: int, access_hash: int, file_reference: bytes):
+        self.file_id = file_id
+        self.access_hash = access_hash
+        self.file_reference = file_reference
 
     @classmethod
     def from_result(cls, result: 'photos.Photo') -> 'FileData':
@@ -60,11 +60,12 @@ class FileData:
         )
 
 
-@dataclasses.dataclass
 class ProfilePic:
-    path: str
-    file_data: Optional[FileData]
-    
+
+    def __init__(self, path: str, file_data: Optional[FileData]):
+        self.path = path
+        self.file_data = file_data
+
     def to_dict(self) -> Dict:
         result = {
             "path": self.path
