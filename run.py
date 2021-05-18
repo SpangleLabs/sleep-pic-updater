@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+import dataclasses
 
 import requests
 from telethon.sync import TelegramClient
@@ -16,6 +17,43 @@ def save_config():
     with open("config.json", "w") as c:
         json.dump(CONFIG, c, indent=2)
 
+
+@dataclasses.dataclass
+class FileData:
+    file_id: str
+    access_hash: str
+    file_reference: bytes
+
+    @classmethod
+    def from_result(cls, result: 'Photo') -> 'FileData':
+        return FileData(
+            result.photo.id,
+            result.photo.access_hash,
+            result.photo.file_reference
+        )
+    
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "id": self.file_id,
+            "access_hash": self.access_hash,
+            "file_reference": base64.b64encode(self.file_reference).decode('ascii')
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, str]) -> 'FileData':
+        return FileData(
+            data['id'],
+            data['access_hash'],
+            base64.b64decode(data['file_reference'])
+        )
+    
+    def to_input_photo(self) -> InputPhoto:
+        return InputPhoto(
+            self.file_id,
+            self.access_hash,
+            self.file_reference
+        )
+        
 
 def is_currently_sleeping():
     try:
@@ -41,22 +79,14 @@ def update_pic(tele_client, is_sleeping):
     request = UploadProfilePhotoRequest(file=input_file)
     result = tele_client(request)
     # Save current state
-    file_dict = {
-        "id": result.photo.id,
-        "access_hash": result.photo.access_hash,
-        "file_reference": base64.b64encode(result.photo.file_reference).decode('ascii')
-    }
-    CONFIG[key]['file'] = file_dict
+    file_data = FileData.from_result(result)
+    CONFIG[key]['file'] = file_data.to_dict()
     save_config()
     print(f"Updated photo to: {key}")
     # Remove the old state, if it exists
     if "file" in CONFIG[other_key]:
-        file_dict = {
-            "id": CONFIG[other_key]["file"]["id"],
-            "access_hash": CONFIG[other_key]["file"]["access_hash"],
-            "file_reference": base64.b64decode(CONFIG[other_key]["file"]["file_reference"])
-        }
-        input_file = InputPhoto(file_dict['id'], file_dict['access_hash'], file_dict['file_reference'])
+        file_data = FileData.from_dict(CONFIG[other_key]["file"])
+        input_file = file_data.to_input_photo()
         request = DeletePhotosRequest(id=[input_file])
         tele_client(request)
         del CONFIG[other_key]['file']
