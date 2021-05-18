@@ -6,9 +6,9 @@ from typing import Dict, Optional
 
 import requests
 from telethon.sync import TelegramClient
-from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
-from telethon.tl.types import InputPhoto
-from telethon.tl.types.photos import Photo
+from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest, UpdateProfilePhotoRequest, \
+    GetUserPhotosRequest
+from telethon.tl.types import InputPhoto, InputUser, Photo, photos
 
 with open("config.json", "r") as f:
     CONFIG = json.load(f)
@@ -26,11 +26,15 @@ class FileData:
     file_reference: bytes
 
     @classmethod
-    def from_result(cls, result: 'Photo') -> 'FileData':
+    def from_result(cls, result: 'photos.Photo') -> 'FileData':
+        return FileData.from_photo(result.photo)
+
+    @classmethod
+    def from_photo(cls, photo: 'Photo') -> 'FileData':
         return FileData(
-            result.photo.id,
-            result.photo.access_hash,
-            result.photo.file_reference
+            photo.id,
+            photo.access_hash,
+            photo.file_reference
         )
     
     def to_dict(self) -> Dict[str, str]:
@@ -76,6 +80,25 @@ class ProfilePic:
             FileData.from_dict(data['file']) if 'file' in data else None
         )
 
+    def upload_profile_photo(self, tele_client: TelegramClient) -> None:
+        input_file = tele_client.upload_file(self.path)
+        request = UploadProfilePhotoRequest(file=input_file)
+        result = tele_client(request)
+        self.file_data = FileData.from_result(result)
+        return
+
+    def set_current(self, tele_client: TelegramClient) -> None:
+        if self.file_data is None:
+            self.upload_profile_photo(tele_client)
+            return
+        try:
+            request = UpdateProfilePhotoRequest(id=self.file_data.to_input_photo())
+            result = tele_client(request)
+            self.file_data = FileData.from_result(result)
+            return
+        except Exception as _:
+            self.upload_profile_photo(tele_client)
+
 
 def is_currently_sleeping():
     try:
@@ -93,30 +116,39 @@ def is_currently_sleeping():
         return None
 
 
-def update_pic(tele_client, is_sleeping):
+def update_pic(tele_client: TelegramClient, is_sleeping: bool) -> None:
     key = "asleep_pic" if is_sleeping else "awake_pic"
-    other_key = "asleep_pic" if not is_sleeping else "awake_pic"
     # Upload pic for current state
-    input_file = tele_client.upload_file(CONFIG[key]['path'])
-    request = UploadProfilePhotoRequest(file=input_file)
-    result = tele_client(request)
+    current_pic = ProfilePic.from_dict(CONFIG[key])
+    current_pic.set_current(tele_client)
     # Save current state
-    file_data = FileData.from_result(result)
-    CONFIG[key]['file'] = file_data.to_dict()
+    CONFIG[key] = current_pic.to_dict()
     save_config()
     print(f"Updated photo to: {key}")
-    # Remove the old state, if it exists
-    if "file" in CONFIG[other_key]:
-        file_data = FileData.from_dict(CONFIG[other_key]["file"])
-        input_file = file_data.to_input_photo()
-        request = DeletePhotosRequest(id=[input_file])
-        tele_client(request)
-        del CONFIG[other_key]['file']
-        save_config()
-        print(f"Removed old photo for: {other_key}")
 
 
-previously_asleep = "file" in CONFIG["asleep_pic"]
+def current_pic(tele_client: TelegramClient, user: InputUser) -> Optional[FileData]:
+    current_photo_id = user.photo.photo_id
+    all_photos = tele_client(GetUserPhotosRequest(user, 0, 0, 0))
+    matching_photo = next(filter(lambda p: p.id == current_photo_id, all_photos), None)
+    if matching_photo is None:
+        return None
+    return FileData.from_photo(matching_photo)
+
+
+def profile_pic_is_sleep(tele_client: TelegramClient, user: InputUser) -> bool:
+    sleep_pic = ProfilePic.from_dict(CONFIG["asleep_pic"])
+    sleep_id = None
+    if sleep_pic.file_data:
+        sleep_id = sleep_pic.file_data.file_id
+    if sleep_id is None:
+        return False
+    current_id = current_pic(tele_client, user).file_id
+    if current_id is None:
+        return False
+    return current_id == sleep_id
+
+
 currently_asleep = None
 with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
     # Get info about current user
@@ -124,6 +156,8 @@ with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
 
     print(me.stringify())
     print(me.username)
+
+    previously_asleep = profile_pic_is_sleep(client, me)
 
     while True:
         try:
