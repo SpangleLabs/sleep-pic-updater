@@ -12,6 +12,11 @@ with open("config.json", "r") as f:
     CONFIG = json.load(f)
 
 
+def save_config():
+    with open("config.json", "w") as c:
+        json.dump(CONFIG, c, indent=2)
+
+
 def is_currently_sleeping():
     try:
         resp = requests.get(
@@ -42,8 +47,7 @@ def update_pic(tele_client, is_sleeping):
         "file_reference": base64.b64encode(result.photo.file_reference).decode('ascii')
     }
     CONFIG[key]['file'] = file_dict
-    with open("config.json", "w") as c:
-        json.dump(CONFIG, c, indent=2)
+    save_config()
     print(f"Updated photo to: {key}")
     # Remove the old state, if it exists
     if "file" in CONFIG[other_key]:
@@ -56,8 +60,7 @@ def update_pic(tele_client, is_sleeping):
         request = DeletePhotosRequest(id=[input_file])
         tele_client(request)
         del CONFIG[other_key]['file']
-        with open("config.json", "w") as c:
-            json.dump(CONFIG, c, indent=2)
+        save_config()
         print(f"Removed old photo for: {other_key}")
 
 
