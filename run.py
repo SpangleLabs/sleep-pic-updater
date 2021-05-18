@@ -16,7 +16,7 @@ with open("config.json", "r") as f:
 def save_config():
     with open("config.json", "w") as c:
         json.dump(CONFIG, c, indent=2)
-
+        
 
 @dataclasses.dataclass
 class FileData:
@@ -53,7 +53,28 @@ class FileData:
             self.access_hash,
             self.file_reference
         )
-        
+
+
+@dataclasses.dataclass
+class ProfilePic:
+    path: str
+    file_data: Optional[FileData]
+    
+    def to_dict() -> Dict:
+        result = {
+            "path": self.path
+        }
+        if self.file_data:
+            result["file"] = self.file_data.to_dict()
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'ProfilePic':
+        return ProfilePic(
+            data['path'],
+            FileData.from_dict(data['file']) if 'file' in data else None
+        )
+
 
 def is_currently_sleeping():
     try:
