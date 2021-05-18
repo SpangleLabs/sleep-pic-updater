@@ -130,7 +130,7 @@ def update_pic(tele_client: TelegramClient, is_sleeping: bool) -> None:
 def current_pic(tele_client: TelegramClient, user: InputUser) -> Optional[FileData]:
     current_photo_id = user.photo.photo_id
     all_photos = tele_client(GetUserPhotosRequest(user, 0, 0, 0))
-    matching_photo = next(filter(lambda p: p.id == current_photo_id, all_photos), None)
+    matching_photo = next(filter(lambda p: p.id == current_photo_id, all_photos.photos), None)
     if matching_photo is None:
         return None
     return FileData.from_photo(matching_photo)
