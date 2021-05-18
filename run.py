@@ -2,12 +2,13 @@ import base64
 import json
 import time
 import dataclasses
+from typing import Dict, Optional
 
 import requests
 from telethon.sync import TelegramClient
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
 from telethon.tl.types import InputPhoto
-
+from telethon.tl.types.photos import Photo
 
 with open("config.json", "r") as f:
     CONFIG = json.load(f)
@@ -20,8 +21,8 @@ def save_config():
 
 @dataclasses.dataclass
 class FileData:
-    file_id: str
-    access_hash: str
+    file_id: int
+    access_hash: int
     file_reference: bytes
 
     @classmethod
@@ -40,7 +41,7 @@ class FileData:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> 'FileData':
+    def from_dict(cls, data: Dict) -> 'FileData':
         return FileData(
             data['id'],
             data['access_hash'],
@@ -60,7 +61,7 @@ class ProfilePic:
     path: str
     file_data: Optional[FileData]
     
-    def to_dict() -> Dict:
+    def to_dict(self) -> Dict:
         result = {
             "path": self.path
         }
