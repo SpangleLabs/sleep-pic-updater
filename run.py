@@ -13,7 +13,7 @@ from telethon.tl.functions.photos import UploadProfilePhotoRequest, UpdateProfil
 from telethon.tl.types import InputPhoto, Photo, photos
 
 
-class State(Enum):
+class PFPState(Enum):
     AWAKE = auto()
     ASLEEP = auto()
 
@@ -23,7 +23,7 @@ latest_switch_time = Gauge("sleeppic_latest_switch_unixtime", "Unix timestamp of
 daily_checks = Counter("sleeppic_dailys_check_total", "Total number of times the dailys API has been checked")
 count_upload = Counter("sleeppic_upload_total", "Total count of profile pics uploaded", labelnames=["state"])
 count_update = Counter("sleeppic_update_total", "Total count of profile pics updated", labelnames=["state"])
-for state_val in State:
+for state_val in PFPState:
     count_upload.labels(state=state_val.name.lower())
     count_update.labels(state=state_val.name.lower())
 
@@ -74,7 +74,7 @@ class FileData:
 
 class ProfilePic:
 
-    def __init__(self, path: str, file_data: Optional[FileData], state: State):
+    def __init__(self, path: str, file_data: Optional[FileData], state: PFPState):
         self.path = path
         self.file_data = file_data
         self.state = state
@@ -88,7 +88,7 @@ class ProfilePic:
         return result
     
     @classmethod
-    def from_dict(cls, data: Dict, state: State) -> 'ProfilePic':
+    def from_dict(cls, data: Dict, state: PFPState) -> 'ProfilePic':
         return ProfilePic(
             data['path'],
             FileData.from_dict(data['file']) if 'file' in data else None,
@@ -162,8 +162,8 @@ class Config:
                 data["dailys_url"],
                 data.get("dailys_auth_key")
             ),
-            ProfilePic.from_dict(data["awake_pic"], State.AWAKE),
-            ProfilePic.from_dict(data["asleep_pic"], State.ASLEEP),
+            ProfilePic.from_dict(data["awake_pic"], PFPState.AWAKE),
+            ProfilePic.from_dict(data["asleep_pic"], PFPState.ASLEEP),
             data.get("prometheus_port", 8380)
         )
 
@@ -244,12 +244,14 @@ class PFPManager:
     async def initialise(self) -> None:
         self.wrapper = TelegramWrapper(self.client)
         await self.wrapper.initialise()
-        self.currently_asleep = await self.profile_pic_is_sleep()
+        self.currently_asleep = await self.profile_pic_is_sleeping()
         startup_time.set_to_current_time()
 
     async def check_and_update(self) -> None:
         currently_asleep = self.dailys.is_currently_sleeping()
-        if currently_asleep is not None and currently_asleep != self.currently_asleep:
+        if currently_asleep is None:
+            return
+        if self.currently_asleep is None or self.currently_asleep != currently_asleep:
             self.currently_asleep = currently_asleep
             await self.update_pic_to_status(currently_asleep)
             latest_switch_time.set_to_current_time()
@@ -263,17 +265,24 @@ class PFPManager:
         self.config.save_to_file()
         print(f"Updated photo to: {pfp.path}")
 
-    async def profile_pic_is_sleep(self) -> bool:
-        sleep_pic = self.config.asleep_pic
-        sleep_id = None
-        if sleep_pic.file_data:
-            sleep_id = sleep_pic.file_data.file_id
-        if sleep_id is None:
-            return False
+    async def profile_pic_is_sleeping(self) -> Optional[bool]:
+        state = await self.profile_pic_state()
+        if state is None:
+            return None
+        return state == PFPState.ASLEEP
+
+    async def profile_pic_state(self) -> Optional[PFPState]:
         current_id = (await self.wrapper.current_pic()).file_id
         if current_id is None:
-            return False
-        return current_id == sleep_id
+            return None
+        matching_pfps = [
+            pfp
+            for pfp in [self.config.asleep_pic, self.config.awake_pic]
+            if pfp.file_data and pfp.file_data.file_id == current_id
+        ]
+        if not matching_pfps:
+            return None
+        return matching_pfps[0].state
 
 
 async def run() -> None:
