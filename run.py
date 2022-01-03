@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import dataclasses
 import json
 from enum import Enum, auto
 from typing import Dict, Optional
@@ -119,16 +118,18 @@ class Dailys:
             return None
 
 
-@dataclasses.dataclass
 class TelegramConfig:
-    api_id: int
-    api_hash: str
+
+    def __init__(self, api_id: int, api_hash: str):
+        self.api_id = api_id
+        self.api_hash = api_hash
 
 
-@dataclasses.dataclass
 class DailysConfig:
-    endpoint_url: str
-    auth_key: Optional[str]
+
+    def __init__(self, endpoint_url: str, auth_key: Optional[str] = None):
+        self.endpoint_url = endpoint_url
+        self.auth_key = auth_key or ""
 
 
 class Config:
