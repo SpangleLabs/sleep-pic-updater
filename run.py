@@ -2,13 +2,30 @@ import asyncio
 import base64
 import dataclasses
 import json
+from enum import Enum, auto
 from typing import Dict, Optional
 
 import requests
+from prometheus_client import Gauge, Counter, start_http_server
 from telethon.sync import TelegramClient
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, UpdateProfilePhotoRequest, \
     GetUserPhotosRequest
 from telethon.tl.types import InputPhoto, Photo, photos
+
+
+class State(Enum):
+    AWAKE = auto()
+    ASLEEP = auto()
+
+
+startup_time = Gauge("sleeppic_start_unixtime", "Unix timestamp of the last startup time")
+latest_switch_time = Gauge("sleeppic_latest_switch_unixtime", "Unix timestamp of the last pfp switch time")
+daily_checks = Counter("sleeppic_dailys_check_total", "Total number of times the dailys API has been checked")
+count_upload = Counter("sleeppic_upload_total", "Total count of profile pics uploaded", labelnames=["state"])
+count_update = Counter("sleeppic_update_total", "Total count of profile pics updated", labelnames=["state"])
+for state_val in State:
+    count_upload.labels(state=state_val.name.lower())
+    count_update.labels(state=state_val.name.lower())
 
 
 class FileData:
@@ -57,9 +74,10 @@ class FileData:
 
 class ProfilePic:
 
-    def __init__(self, path: str, file_data: Optional[FileData]):
+    def __init__(self, path: str, file_data: Optional[FileData], state: State):
         self.path = path
         self.file_data = file_data
+        self.state = state
 
     def to_dict(self) -> Dict:
         result = {
@@ -70,10 +88,11 @@ class ProfilePic:
         return result
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'ProfilePic':
+    def from_dict(cls, data: Dict, state: State) -> 'ProfilePic':
         return ProfilePic(
             data['path'],
-            FileData.from_dict(data['file']) if 'file' in data else None
+            FileData.from_dict(data['file']) if 'file' in data else None,
+            state
         )
 
 
@@ -91,6 +110,7 @@ class Dailys:
                     "Authorization": self.auth_key
                 }
             )
+            daily_checks.inc()
             if resp.status_code == 200:
                 return resp.json()['is_sleeping']
             else:
@@ -117,12 +137,14 @@ class Config:
             telegram_config: TelegramConfig,
             dailys_config: DailysConfig,
             awake_pic: ProfilePic,
-            asleep_pic: ProfilePic
+            asleep_pic: ProfilePic,
+            prom_port: int
     ) -> None:
         self.telegram_config = telegram_config
         self.dailys_config = dailys_config
         self.awake_pic = awake_pic
         self.asleep_pic = asleep_pic
+        self.prom_port = prom_port
 
     @classmethod
     def load_from_file(cls) -> "Config":
@@ -140,8 +162,9 @@ class Config:
                 data["dailys_url"],
                 data.get("dailys_auth_key")
             ),
-            ProfilePic.from_dict(data["awake_pic"]),
-            ProfilePic.from_dict(data["asleep_pic"])
+            ProfilePic.from_dict(data["awake_pic"], State.AWAKE),
+            ProfilePic.from_dict(data["asleep_pic"], State.ASLEEP),
+            data.get("prometheus_port", 8380)
         )
 
     def save_to_file(self) -> None:
@@ -171,9 +194,10 @@ class TelegramWrapper:
         print(self.me.stringify())
         print(self.me.username)
 
-    async def update_profile_photo(self, pfp_file: FileData) -> Optional[FileData]:
+    async def update_profile_photo(self, pfp: ProfilePic) -> Optional[FileData]:
         print("Updating profile photo")
-        pfp_input = pfp_file.to_input_photo()
+        count_update.labels(state=pfp.state.name.lower()).inc()
+        pfp_input = pfp.file_data.to_input_photo()
         resp = await self.client(UpdateProfilePhotoRequest(id=pfp_input))
         new_pfp_id = resp.photo.photo_id
         return await self.get_pfp_with_photo_id(new_pfp_id)
@@ -191,6 +215,7 @@ class TelegramWrapper:
 
     async def upload_profile_photo(self, pfp: ProfilePic) -> FileData:
         print("Uploading profile photo")
+        count_upload.labels(state=pfp.state.name.lower()).inc()
         input_file = await self.client.upload_file(pfp.path)
         result = await self.client(UploadProfilePhotoRequest(file=input_file))
         pfp.file_data = FileData.from_result(result)
@@ -200,7 +225,7 @@ class TelegramWrapper:
         if pfp.file_data is None:
             return await self.upload_profile_photo(pfp)
         try:
-            file_data = await self.update_profile_photo(pfp.file_data)
+            file_data = await self.update_profile_photo(pfp)
             if file_data:
                 return file_data
         except Exception as _:
@@ -220,12 +245,14 @@ class PFPManager:
         self.wrapper = TelegramWrapper(self.client)
         await self.wrapper.initialise()
         self.currently_asleep = await self.profile_pic_is_sleep()
+        startup_time.set_to_current_time()
 
     async def check_and_update(self) -> None:
         currently_asleep = self.dailys.is_currently_sleeping()
         if currently_asleep is not None and currently_asleep != self.currently_asleep:
             self.currently_asleep = currently_asleep
             await self.update_pic_to_status(currently_asleep)
+            latest_switch_time.set_to_current_time()
 
     async def update_pic_to_status(self, is_sleeping: bool) -> None:
         pfp = self.config.asleep_pic if is_sleeping else self.config.awake_pic
@@ -254,6 +281,7 @@ async def run() -> None:
     async with TelegramClient('anon', conf.telegram_config.api_id, conf.telegram_config.api_hash) as c:
         manager = PFPManager(conf, c)
         await manager.initialise()
+        start_http_server(conf.prom_port)
 
         while True:
             try:
