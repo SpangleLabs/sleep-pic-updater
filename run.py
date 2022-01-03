@@ -1,28 +1,24 @@
+import asyncio
 import base64
+import dataclasses
 import json
-import time
 from typing import Dict, Optional
 
 import requests
 from telethon.sync import TelegramClient
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, UpdateProfilePhotoRequest, \
     GetUserPhotosRequest
-from telethon.tl.types import InputPhoto, InputUser, Photo, photos
+from telethon.tl.types import InputPhoto, Photo, photos
 
-with open("config.json", "r") as f:
-    CONFIG = json.load(f)
-
-
-def save_config():
-    with open("config.json", "w") as c:
-        json.dump(CONFIG, c, indent=2)
-        
 
 class FileData:
     def __init__(self, file_id: int, access_hash: int, file_reference: bytes):
         self.file_id = file_id
         self.access_hash = access_hash
         self.file_reference = file_reference
+
+    def __eq__(self, other: "FileData") -> bool:
+        return isinstance(other, FileData) and self.file_id == other.file_id and self.access_hash == other.access_hash
 
     @classmethod
     def from_result(cls, result: 'photos.Photo') -> 'FileData':
@@ -80,95 +76,195 @@ class ProfilePic:
             FileData.from_dict(data['file']) if 'file' in data else None
         )
 
-    def upload_profile_photo(self, tele_client: TelegramClient) -> None:
-        input_file = tele_client.upload_file(self.path)
-        request = UploadProfilePhotoRequest(file=input_file)
-        result = tele_client(request)
-        self.file_data = FileData.from_result(result)
-        return
 
-    def set_current(self, tele_client: TelegramClient) -> None:
-        if self.file_data is None:
-            self.upload_profile_photo(tele_client)
-            return
+# noinspection PyBroadException
+class Dailys:
+    def __init__(self, endpoint_url: str, auth_key: Optional[str] = ""):
+        self.endpoint_url = endpoint_url
+        self.auth_key = auth_key or ""
+
+    def is_currently_sleeping(self) -> Optional[bool]:
         try:
-            request = UpdateProfilePhotoRequest(id=self.file_data.to_input_photo())
-            result = tele_client(request)
-            self.file_data = FileData.from_result(result)
-            return
+            resp = requests.get(
+                self.endpoint_url,
+                headers={
+                    "Authorization": self.auth_key
+                }
+            )
+            if resp.status_code == 200:
+                return resp.json()['is_sleeping']
+            else:
+                return None
         except Exception as _:
-            self.upload_profile_photo(tele_client)
-
-
-def is_currently_sleeping():
-    try:
-        resp = requests.get(
-            CONFIG['dailys_url'],
-            headers={
-                "Authorization": CONFIG.get("dailys_auth_key", "")
-            }
-        )
-        if resp.status_code == 200:
-            return resp.json()['is_sleeping']
-        else:
             return None
-    except Exception as _:
-        return None
 
 
-def update_pic(tele_client: TelegramClient, is_sleeping: bool) -> None:
-    key = "asleep_pic" if is_sleeping else "awake_pic"
-    # Upload pic for current state
-    current_pic = ProfilePic.from_dict(CONFIG[key])
-    current_pic.set_current(tele_client)
-    # Save current state
-    CONFIG[key] = current_pic.to_dict()
-    save_config()
-    print(f"Updated photo to: {key}")
+@dataclasses.dataclass
+class TelegramConfig:
+    api_id: int
+    api_hash: str
 
 
-def current_pic(tele_client: TelegramClient, user: InputUser) -> Optional[FileData]:
-    current_photo_id = user.photo.photo_id
-    all_photos = tele_client(GetUserPhotosRequest(user, 0, 0, 0))
-    matching_photo = next(filter(lambda p: p.id == current_photo_id, all_photos.photos), None)
-    if matching_photo is None:
-        return None
-    return FileData.from_photo(matching_photo)
+@dataclasses.dataclass
+class DailysConfig:
+    endpoint_url: str
+    auth_key: Optional[str]
 
 
-def profile_pic_is_sleep(tele_client: TelegramClient, user: InputUser) -> bool:
-    sleep_pic = ProfilePic.from_dict(CONFIG["asleep_pic"])
-    sleep_id = None
-    if sleep_pic.file_data:
-        sleep_id = sleep_pic.file_data.file_id
-    if sleep_id is None:
-        return False
-    current_id = current_pic(tele_client, user).file_id
-    if current_id is None:
-        return False
-    return current_id == sleep_id
+class Config:
+    def __init__(
+            self,
+            telegram_config: TelegramConfig,
+            dailys_config: DailysConfig,
+            awake_pic: ProfilePic,
+            asleep_pic: ProfilePic
+    ) -> None:
+        self.telegram_config = telegram_config
+        self.dailys_config = dailys_config
+        self.awake_pic = awake_pic
+        self.asleep_pic = asleep_pic
+
+    @classmethod
+    def load_from_file(cls) -> "Config":
+        with open("config.json", "r") as f:
+            return cls.from_dict(json.load(f))
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Config":
+        return Config(
+            TelegramConfig(
+                data["api_id"],
+                data["api_hash"]
+            ),
+            DailysConfig(
+                data["dailys_url"],
+                data.get("dailys_auth_key")
+            ),
+            ProfilePic.from_dict(data["awake_pic"]),
+            ProfilePic.from_dict(data["asleep_pic"])
+        )
+
+    def save_to_file(self) -> None:
+        config = {
+            "api_id": self.telegram_config.api_id,
+            "api_hash": self.telegram_config.api_hash,
+            "dailys_url": self.dailys_config.endpoint_url,
+            "dailys_auth_key": self.dailys_config.auth_key,
+            "awake_pic": self.awake_pic.to_dict(),
+            "asleep_pic": self.asleep_pic.to_dict()
+        }
+        with open("config.json", "w") as f:
+            json.dump(config, f, indent=2)
 
 
-if __name__ == "__main__":
-    currently_asleep = None
-    with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
-        # Get info about current user
-        me = client.get_me()
+# noinspection PyBroadException
+class TelegramWrapper:
+    def __init__(self, client: TelegramClient):
+        self.client = client
+        self.me = None
 
-        print(me.stringify())
-        print(me.username)
+    async def initialise(self) -> None:
+        self.me = await self.client.get_me()
+        self.print_me()
 
-        previously_asleep = profile_pic_is_sleep(client, me)
+    def print_me(self) -> None:
+        print(self.me.stringify())
+        print(self.me.username)
+
+    async def update_profile_photo(self, pfp_file: FileData) -> Optional[FileData]:
+        print("Updating profile photo")
+        pfp_input = pfp_file.to_input_photo()
+        resp = await self.client(UpdateProfilePhotoRequest(id=pfp_input))
+        new_pfp_id = resp.photo.photo_id
+        return await self.get_pfp_with_photo_id(new_pfp_id)
+
+    async def get_pfp_with_photo_id(self, photo_id: int) -> Optional[FileData]:
+        all_photos = await self.client(GetUserPhotosRequest(self.me, 0, 0, 0))
+        matching_photo = next(filter(lambda p: p.id == photo_id, all_photos.photos), None)
+        if matching_photo is None:
+            return None
+        return FileData.from_photo(matching_photo)
+
+    async def current_pic(self) -> Optional[FileData]:
+        current_photo_id = self.me.photo.photo_id
+        return await self.get_pfp_with_photo_id(current_photo_id)
+
+    async def upload_profile_photo(self, pfp: ProfilePic) -> FileData:
+        print("Uploading profile photo")
+        input_file = await self.client.upload_file(pfp.path)
+        result = await self.client(UploadProfilePhotoRequest(file=input_file))
+        pfp.file_data = FileData.from_result(result)
+        return FileData.from_result(result)
+
+    async def set_pfp(self, pfp: ProfilePic) -> FileData:
+        if pfp.file_data is None:
+            return await self.upload_profile_photo(pfp)
+        try:
+            file_data = await self.update_profile_photo(pfp.file_data)
+            if file_data:
+                return file_data
+        except Exception as _:
+            pass
+        return await self.upload_profile_photo(pfp)
+
+
+class PFPManager:
+    def __init__(self, config: Config, client: TelegramClient) -> None:
+        self.config = config
+        self.client = client
+        self.dailys = Dailys(self.config.dailys_config.endpoint_url, self.config.dailys_config.auth_key)
+        self.wrapper = None
+        self.currently_asleep = None
+
+    async def initialise(self) -> None:
+        self.wrapper = TelegramWrapper(self.client)
+        await self.wrapper.initialise()
+        self.currently_asleep = await self.profile_pic_is_sleep()
+
+    async def check_and_update(self) -> None:
+        currently_asleep = self.dailys.is_currently_sleeping()
+        if currently_asleep is not None and currently_asleep != self.currently_asleep:
+            self.currently_asleep = currently_asleep
+            await self.update_pic_to_status(currently_asleep)
+
+    async def update_pic_to_status(self, is_sleeping: bool) -> None:
+        pfp = self.config.asleep_pic if is_sleeping else self.config.awake_pic
+        # Upload pic for current state
+        file_data = await self.wrapper.set_pfp(pfp)
+        pfp.file_data = file_data
+        # Save current state
+        self.config.save_to_file()
+        print(f"Updated photo to: {pfp.path}")
+
+    async def profile_pic_is_sleep(self) -> bool:
+        sleep_pic = self.config.asleep_pic
+        sleep_id = None
+        if sleep_pic.file_data:
+            sleep_id = sleep_pic.file_data.file_id
+        if sleep_id is None:
+            return False
+        current_id = (await self.wrapper.current_pic()).file_id
+        if current_id is None:
+            return False
+        return current_id == sleep_id
+
+
+async def run() -> None:
+    conf = Config.load_from_file()
+    async with TelegramClient('anon', conf.telegram_config.api_id, conf.telegram_config.api_hash) as c:
+        manager = PFPManager(conf, c)
+        await manager.initialise()
 
         while True:
             try:
                 print("Checking..")
-                currently_asleep = is_currently_sleeping()
-                if currently_asleep is not None and currently_asleep != previously_asleep:
-                    previously_asleep = currently_asleep
-                    update_pic(client, currently_asleep)
-                time.sleep(60)
+                await manager.check_and_update()
+                await asyncio.sleep(60)
             except KeyboardInterrupt:
                 break
 
+
+if __name__ == "__main__":
+    event_loop = asyncio.get_event_loop()
+    event_loop.run_until_complete(run())
     print("Shutting down")
