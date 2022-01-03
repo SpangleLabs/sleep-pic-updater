@@ -149,25 +149,26 @@ def profile_pic_is_sleep(tele_client: TelegramClient, user: InputUser) -> bool:
     return current_id == sleep_id
 
 
-currently_asleep = None
-with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
-    # Get info about current user
-    me = client.get_me()
+if __name__ == "__main__":
+    currently_asleep = None
+    with TelegramClient('anon', CONFIG['api_id'], CONFIG['api_hash']) as client:
+        # Get info about current user
+        me = client.get_me()
 
-    print(me.stringify())
-    print(me.username)
+        print(me.stringify())
+        print(me.username)
 
-    previously_asleep = profile_pic_is_sleep(client, me)
+        previously_asleep = profile_pic_is_sleep(client, me)
 
-    while True:
-        try:
-            print("Checking..")
-            currently_asleep = is_currently_sleeping()
-            if currently_asleep is not None and currently_asleep != previously_asleep:
-                previously_asleep = currently_asleep
-                update_pic(client, currently_asleep)
-            time.sleep(60)
-        except KeyboardInterrupt:
-            break
+        while True:
+            try:
+                print("Checking..")
+                currently_asleep = is_currently_sleeping()
+                if currently_asleep is not None and currently_asleep != previously_asleep:
+                    previously_asleep = currently_asleep
+                    update_pic(client, currently_asleep)
+                time.sleep(60)
+            except KeyboardInterrupt:
+                break
 
-print("Shutting down")
+    print("Shutting down")
