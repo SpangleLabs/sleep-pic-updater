@@ -282,6 +282,7 @@ class PFPManager:
         if new_state is None:
             return
         if self.current_state is None or self.current_state != new_state:
+            logger.info(f"State has changed from {self.current_state} to {new_state}")
             self.current_state = new_state
             state_enum.state(new_state.name.lower())
             await self.update_pic_to_state(new_state)
