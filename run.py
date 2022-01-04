@@ -4,8 +4,9 @@ import json
 import logging
 import sys
 from enum import Enum, auto
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
+import prometheus_client
 import requests
 from prometheus_client import Gauge, Counter, start_http_server
 from telethon.sync import TelegramClient
@@ -27,6 +28,11 @@ latest_switch_time = Gauge("sleeppic_latest_switch_unixtime", "Unix timestamp of
 daily_checks = Counter("sleeppic_dailys_check_total", "Total number of times the dailys API has been checked")
 count_upload = Counter("sleeppic_upload_total", "Total count of profile pics uploaded", labelnames=["state"])
 count_update = Counter("sleeppic_update_total", "Total count of profile pics updated", labelnames=["state"])
+state_enum = prometheus_client.Enum(
+    "sleeppic_current_state",
+    "Current state of profile picture",
+    states=[state_val.name.lower() for state_val in PFPState] + ["unknown"]
+)
 for state_val in PFPState:
     count_upload.labels(state=state_val.name.lower())
     count_update.labels(state=state_val.name.lower())
@@ -106,7 +112,7 @@ class Dailys:
         self.endpoint_url = endpoint_url
         self.auth_key = auth_key or ""
 
-    def is_currently_sleeping(self) -> Optional[bool]:
+    def current_state(self) -> Optional[PFPState]:
         try:
             logger.debug("Checking dailys")
             resp = requests.get(
@@ -117,7 +123,7 @@ class Dailys:
             )
             daily_checks.inc()
             if resp.status_code == 200:
-                state = resp.json()['is_sleeping']
+                state = PFPState.ASLEEP if resp.json()['is_sleeping'] else PFPState.AWAKE
                 logger.debug(f"Dailys sleeping state: {state}")
                 return state
             else:
@@ -156,6 +162,13 @@ class Config:
         self.asleep_pic = asleep_pic
         self.prom_port = prom_port
 
+    @property
+    def profile_pics(self) -> List[ProfilePic]:
+        return [self.awake_pic, self.asleep_pic]
+
+    def get_pic_with_state(self, state: PFPState) -> Optional[ProfilePic]:
+        return next(filter(lambda pfp: pfp.state == state, self.profile_pics), None)
+
     @classmethod
     def load_from_file(cls) -> "Config":
         with open("config.json", "r") as f:
@@ -187,6 +200,7 @@ class Config:
             "asleep_pic": self.asleep_pic.to_dict()
         }
         with open("config.json", "w") as f:
+            logger.debug("Saving config to file")
             json.dump(config, f, indent=2)
 
 
@@ -239,6 +253,7 @@ class TelegramWrapper:
             file_data = await self.update_profile_photo(pfp)
             if file_data:
                 return file_data
+            logger.warning("Could not find file data for newly updated profile picture.")
         except Exception as e:
             logger.warning("Failed to update profile picture: ", exc_info=e)
             pass
@@ -251,25 +266,32 @@ class PFPManager:
         self.client = client
         self.dailys = Dailys(self.config.dailys_config.endpoint_url, self.config.dailys_config.auth_key)
         self.wrapper = None
-        self.currently_asleep = None
+        self.current_state = None
+        state_enum.state("unknown")
 
     async def initialise(self) -> None:
         self.wrapper = TelegramWrapper(self.client)
         await self.wrapper.initialise()
-        self.currently_asleep = await self.profile_pic_is_sleeping()
+        self.current_state = await self.profile_pic_state()
+        if self.current_state:
+            state_enum.state(self.current_state.name.lower())
         startup_time.set_to_current_time()
 
     async def check_and_update(self) -> None:
-        currently_asleep = self.dailys.is_currently_sleeping()
-        if currently_asleep is None:
+        new_state = self.dailys.current_state()
+        if new_state is None:
             return
-        if self.currently_asleep is None or self.currently_asleep != currently_asleep:
-            self.currently_asleep = currently_asleep
-            await self.update_pic_to_status(currently_asleep)
+        if self.current_state is None or self.current_state != new_state:
+            self.current_state = new_state
+            state_enum.state(new_state.name.lower())
+            await self.update_pic_to_state(new_state)
             latest_switch_time.set_to_current_time()
 
-    async def update_pic_to_status(self, is_sleeping: bool) -> None:
-        pfp = self.config.asleep_pic if is_sleeping else self.config.awake_pic
+    async def update_pic_to_state(self, state: PFPState) -> None:
+        pfp = self.config.get_pic_with_state(state)
+        if pfp is None:
+            logger.error(f"No profile pic configured for state: {state}")
+            return
         # Upload pic for current state
         file_data = await self.wrapper.set_pfp(pfp)
         pfp.file_data = file_data
@@ -277,19 +299,13 @@ class PFPManager:
         self.config.save_to_file()
         logger.info(f"Updated photo to: {pfp.path}")
 
-    async def profile_pic_is_sleeping(self) -> Optional[bool]:
-        state = await self.profile_pic_state()
-        if state is None:
-            return None
-        return state == PFPState.ASLEEP
-
     async def profile_pic_state(self) -> Optional[PFPState]:
         current_id = (await self.wrapper.current_pic()).file_id
         if current_id is None:
             return None
         matching_pfps = [
             pfp
-            for pfp in [self.config.asleep_pic, self.config.awake_pic]
+            for pfp in self.config.profile_pics
             if pfp.file_data and pfp.file_data.file_id == current_id
         ]
         if not matching_pfps:
