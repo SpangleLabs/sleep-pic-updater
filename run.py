@@ -301,17 +301,23 @@ class PFPManager:
         logger.info(f"Updated photo to: {pfp.path}")
 
     async def profile_pic_state(self) -> Optional[PFPState]:
-        current_id = (await self.wrapper.current_pic()).file_id
-        if current_id is None:
+        logger.info("Checking current profile picture state")
+        current_file = await self.wrapper.current_pic()
+        if current_file is None:
+            logger.warning("No profile picture is currently set")
             return None
+        current_id = current_file.file_id
         matching_pfps = [
             pfp
             for pfp in self.config.profile_pics
             if pfp.file_data and pfp.file_data.file_id == current_id
         ]
         if not matching_pfps:
+            logger.warning("Current profile picture did not seem to match any known state")
             return None
-        return matching_pfps[0].state
+        current_state = matching_pfps[0].state
+        logger.info(f"Current profile picture is {current_state}")
+        return current_state
 
 
 def setup_logging() -> None:
