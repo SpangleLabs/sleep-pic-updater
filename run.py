@@ -12,8 +12,7 @@ from prometheus_client import Gauge, Counter, start_http_server
 from telethon.sync import TelegramClient
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, UpdateProfilePhotoRequest, \
     GetUserPhotosRequest
-from telethon.tl.types import InputPhoto, Photo, photos
-
+from telethon.tl.types import InputPhoto, Photo, photos, UserProfilePhoto
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +225,13 @@ class TelegramWrapper:
         if pfp_file is not None:
             pfp_input = pfp_file.to_input_photo()
         resp = await self.client(UpdateProfilePhotoRequest(id=pfp_input))
-        new_pfp_id = resp.photo.photo_id
+        if isinstance(resp.photo, UserProfilePhoto):
+            new_pfp_id = resp.photo.photo_id
+        elif isinstance(resp.photo, Photo):
+            new_pfp_id = resp.photo.id
+        else:
+            logger.error(f"UpdateProfilePhotoRequest returned unrecognised type: {resp.photo}")
+            return None
         return await self.get_pfp_with_photo_id(new_pfp_id)
 
     async def get_pfp_with_photo_id(self, photo_id: int) -> Optional[FileData]:
