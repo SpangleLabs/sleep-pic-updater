@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import json
+import logging
+import sys
 from enum import Enum, auto
 from typing import Dict, Optional
 
@@ -10,6 +12,9 @@ from telethon.sync import TelegramClient
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, UpdateProfilePhotoRequest, \
     GetUserPhotosRequest
 from telethon.tl.types import InputPhoto, Photo, photos
+
+
+logger = logging.getLogger(__name__)
 
 
 class PFPState(Enum):
@@ -103,6 +108,7 @@ class Dailys:
 
     def is_currently_sleeping(self) -> Optional[bool]:
         try:
+            logger.debug("Checking dailys")
             resp = requests.get(
                 self.endpoint_url,
                 headers={
@@ -111,10 +117,13 @@ class Dailys:
             )
             daily_checks.inc()
             if resp.status_code == 200:
-                return resp.json()['is_sleeping']
+                state = resp.json()['is_sleeping']
+                logger.debug(f"Dailys sleeping state: {state}")
+                return state
             else:
                 return None
-        except Exception as _:
+        except Exception as e:
+            logger.warning("Failed to get status from dailys: ", exc_info=e)
             return None
 
 
@@ -192,11 +201,11 @@ class TelegramWrapper:
         self.print_me()
 
     def print_me(self) -> None:
-        print(self.me.stringify())
-        print(self.me.username)
+        logger.debug(self.me.stringify())
+        logger.debug(self.me.username)
 
     async def update_profile_photo(self, pfp: ProfilePic) -> Optional[FileData]:
-        print("Updating profile photo")
+        logger.info("Updating profile photo")
         count_update.labels(state=pfp.state.name.lower()).inc()
         pfp_input = pfp.file_data.to_input_photo()
         resp = await self.client(UpdateProfilePhotoRequest(id=pfp_input))
@@ -207,6 +216,7 @@ class TelegramWrapper:
         all_photos = await self.client(GetUserPhotosRequest(self.me, 0, 0, 0))
         matching_photo = next(filter(lambda p: p.id == photo_id, all_photos.photos), None)
         if matching_photo is None:
+            logger.warning(f"Could not find profile photo with ID: {photo_id}")
             return None
         return FileData.from_photo(matching_photo)
 
@@ -215,7 +225,7 @@ class TelegramWrapper:
         return await self.get_pfp_with_photo_id(current_photo_id)
 
     async def upload_profile_photo(self, pfp: ProfilePic) -> FileData:
-        print("Uploading profile photo")
+        logger.info("Uploading profile photo")
         count_upload.labels(state=pfp.state.name.lower()).inc()
         input_file = await self.client.upload_file(pfp.path)
         result = await self.client(UploadProfilePhotoRequest(file=input_file))
@@ -229,7 +239,8 @@ class TelegramWrapper:
             file_data = await self.update_profile_photo(pfp)
             if file_data:
                 return file_data
-        except Exception as _:
+        except Exception as e:
+            logger.warning("Failed to update profile picture: ", exc_info=e)
             pass
         return await self.upload_profile_photo(pfp)
 
@@ -264,7 +275,7 @@ class PFPManager:
         pfp.file_data = file_data
         # Save current state
         self.config.save_to_file()
-        print(f"Updated photo to: {pfp.path}")
+        logger.info(f"Updated photo to: {pfp.path}")
 
     async def profile_pic_is_sleeping(self) -> Optional[bool]:
         state = await self.profile_pic_state()
@@ -286,6 +297,15 @@ class PFPManager:
         return matching_pfps[0].state
 
 
+def setup_logging() -> None:
+    formatter = logging.Formatter("{asctime}:{levelname}:{name}:{message}", style="{")
+    base_logger = logging.getLogger()
+    base_logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    base_logger.addHandler(console_handler)
+
+
 async def run() -> None:
     conf = Config.load_from_file()
     async with TelegramClient('anon', conf.telegram_config.api_id, conf.telegram_config.api_hash) as c:
@@ -295,7 +315,7 @@ async def run() -> None:
 
         while True:
             try:
-                print("Checking..")
+                logger.info("Checking..")
                 await manager.check_and_update()
                 await asyncio.sleep(60)
             except KeyboardInterrupt:
@@ -303,6 +323,7 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
+    setup_logging()
     event_loop = asyncio.get_event_loop()
     event_loop.run_until_complete(run())
-    print("Shutting down")
+    logger.info("Shutting down")
