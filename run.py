@@ -221,7 +221,10 @@ class TelegramWrapper:
     async def update_profile_photo(self, pfp: ProfilePic) -> Optional[FileData]:
         logger.info("Updating profile photo")
         count_update.labels(state=pfp.state.name.lower()).inc()
+        pfp_file = await self.get_pfp_with_photo_id(pfp.file_data.file_id)
         pfp_input = pfp.file_data.to_input_photo()
+        if pfp_file is not None:
+            pfp_input = pfp_file.to_input_photo()
         resp = await self.client(UpdateProfilePhotoRequest(id=pfp_input))
         new_pfp_id = resp.photo.photo_id
         return await self.get_pfp_with_photo_id(new_pfp_id)
